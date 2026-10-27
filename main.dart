@@ -16,14 +16,14 @@ class ExpenseSplitterApp extends StatelessWidget {
   }
 }
 
-enum SplitType { exact, ratio, percentage }
+enum SplitType { exact, ratio, percentage, settlement }
 
 class Expense {
   final String title;
   final double totalAmount;
   final String paidBy;
   final SplitType splitType;
-  final Map<String, double> splits; // Final calculated amount per person
+  final Map<String, double> splits;
 
   Expense({
     required this.title,
@@ -32,6 +32,13 @@ class Expense {
     required this.splitType,
     required this.splits,
   });
+}
+
+class SettlementTransfer {
+  final String from;
+  final String to;
+  final double amount;
+  SettlementTransfer(this.from, this.to, this.amount);
 }
 
 class HomeScreen extends StatefulWidget {
@@ -45,7 +52,6 @@ class _HomeScreenState extends State<HomeScreen> {
   final List<String> members = ['Alice', 'Bob', 'Charlie'];
   final List<Expense> expenses = [];
 
-  // Calculate net balance for each member
   Map<String, double> _calculateBalances() {
     final Map<String, double> balances = {for (var m in members) m: 0.0};
     for (var exp in expenses) {
@@ -55,6 +61,76 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     }
     return balances;
+  }
+
+  List<SettlementTransfer> _calculateMinimalTransfers(Map<String, double> balances) {
+    final debtors = <MapEntry<String, double>>[];
+    final creditors = <MapEntry<String, double>>[];
+
+    balances.forEach((person, bal) {
+      if (bal < -0.01) debtors.add(MapEntry(person, -bal));
+      if (bal > 0.01) creditors.add(MapEntry(person, bal));
+    });
+
+    debtors.sort((a, b) => b.value.compareTo(a.value));
+    creditors.sort((a, b) => b.value.compareTo(a.value));
+
+    final transfers = <SettlementTransfer>[];
+    int i = 0, j = 0;
+
+    while (i < debtors.length && j < creditors.length) {
+      final pay = debtors[i].value < creditors[j].value ? debtors[i].value : creditors[j].value;
+      transfers.add(SettlementTransfer(debtors[i].key, creditors[j].key, pay));
+
+      debtors[i] = MapEntry(debtors[i].key, debtors[i].value - pay);
+      creditors[j] = MapEntry(creditors[j].key, creditors[j].value - pay);
+
+      if (debtors[i].value < 0.01) i++;
+      if (creditors[j].value < 0.01) j++;
+    }
+    return transfers;
+  }
+
+  void _recordSettlement(SettlementTransfer t) {
+    setState(() {
+      expenses.insert(
+        0,
+        Expense(
+          title: 'Settlement: ${t.from} paid ${t.to}',
+          totalAmount: t.amount,
+          paidBy: t.from,
+          splitType: SplitType.settlement,
+          splits: {for (var m in members) m: m == t.to ? t.amount : 0.0},
+        ),
+      );
+    });
+  }
+
+  void _addMemberDialog() {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Add Group Member'),
+        content: TextField(
+          controller: ctrl,
+          decoration: const InputDecoration(hintText: 'Enter name'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              final name = ctrl.text.trim();
+              if (name.isNotEmpty && !members.contains(name)) {
+                setState(() => members.add(name));
+              }
+              Navigator.pop(context);
+            },
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _openAddExpenseSheet() {
@@ -71,40 +147,92 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final balances = _calculateBalances();
+    final settlements = _calculateMinimalTransfers(balances);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('SplitEasy Expenses')),
+      appBar: AppBar(
+        title: const Text('SplitEasy'),
+        actions: [
+          TextButton.icon(
+            onPressed: _addMemberDialog,
+            icon: const Icon(Icons.person_add),
+            label: const Text('Add Person'),
+          ),
+        ],
+      ),
       body: Column(
         children: [
-          // Balances Summary Card
+          // Balances Card
           Card(
-            margin: const EdgeInsets.all(12),
+            margin: const EdgeInsets.fromLTRB(12, 12, 12, 6),
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text('Net Balances',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
                   const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: members.map((m) {
-                      final bal = balances[m] ?? 0.0;
-                      return Column(
-                        children: [
-                          Text(m, style: const TextStyle(fontWeight: FontWeight.w600)),
-                          Text(
-                            '${bal >= 0 ? "+" : ""}₹${bal.toStringAsFixed(2)}',
-                            style: TextStyle(
-                              color: bal >= 0 ? Colors.green[700] : Colors.red[700],
-                              fontWeight: FontWeight.bold,
-                            ),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: members.map((m) {
+                        final bal = balances[m] ?? 0.0;
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: Column(
+                            children: [
+                              Text(m, style: const TextStyle(fontWeight: FontWeight.w600)),
+                              Text(
+                                '${bal >= 0 ? "+" : ""}₹${bal.toStringAsFixed(2)}',
+                                style: TextStyle(
+                                  color: bal >= 0 ? Colors.green[700] : Colors.red[700],
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      );
-                    }).toList(),
+                        );
+                      }).toList(),
+                    ),
                   ),
+                ],
+              ),
+            ),
+          ),
+          // Settle Up Card
+          Card(
+            margin: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Settle Up (Who Owes Whom)',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                  const SizedBox(height: 6),
+                  if (settlements.isEmpty)
+                    const Text('All settled up! No pending debts.',
+                        style: TextStyle(color: Colors.green))
+                  else
+                    ...settlements.map((t) => Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '${t.from} pays ${t.to} ₹${t.amount.toStringAsFixed(2)}',
+                                  style: const TextStyle(fontWeight: FontWeight.w500),
+                                ),
+                              ),
+                              FilledButton.tonal(
+                                onPressed: () => _recordSettlement(t),
+                                child: const Text('Mark Paid'),
+                              ),
+                            ],
+                          ),
+                        )),
                 ],
               ),
             ),
@@ -127,13 +255,14 @@ class _HomeScreenState extends State<HomeScreen> {
                         subtitle: Text('Paid by ${exp.paidBy} • ${exp.splitType.name.toUpperCase()}'),
                         trailing: Text('₹${exp.totalAmount.toStringAsFixed(2)}',
                             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                        children: exp.splits.entries.map((entry) {
-                          return ListTile(
-                            dense: true,
-                            title: Text(entry.key),
-                            trailing: Text('Owes ₹${entry.value.toStringAsFixed(2)}'),
-                          );
-                        }).toList(),
+                        children: exp.splits.entries
+                            .where((e) => e.value > 0)
+                            .map((entry) => ListTile(
+                                  dense: true,
+                                  title: Text(entry.key),
+                                  trailing: Text('Share: ₹${entry.value.toStringAsFixed(2)}'),
+                                ))
+                            .toList(),
                       );
                     },
                   ),
